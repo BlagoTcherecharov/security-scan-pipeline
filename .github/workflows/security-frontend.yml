@@ -93,12 +93,21 @@ jobs:
           tar xzf cov-analysis.tgz --strip-components=1 -C cov-analysis
           rm cov-analysis.tgz
 
-      # JS/TS needs no build: cov-capture reads the source files directly
-      # (cov-build in this tool has no build-less options). No npm install here, so no node_modules.
-      - name: Capture source
+      # TEMPORARY: find out how this Coverity Scan tool captures JS/TS without a build.
+      # Prints the tool's commands and cov-build's capture-related options, then stops
+      # (exit 1) so nothing is uploaded and no Coverity build quota is used.
+      - name: Inspect Coverity tool
         run: |
-          cov-analysis/bin/cov-capture --help | head -60 || true
-          cov-analysis/bin/cov-capture --dir cov-int --source-dir "$APP_DIR"
+          echo "== version"; cov-analysis/bin/cov-build --ident
+          echo "== commands in bin/ (capture/emit/script related)"
+          find cov-analysis/bin -maxdepth 1 -type f -printf '%f\n' | grep -iE 'capture|emit|java|script|node|ts|js' || true
+          echo "== all commands in bin/"
+          find cov-analysis/bin -maxdepth 1 -type f -printf '%f ' ; echo
+          echo "== cov-build options mentioning capture/search/command/script/language"
+          cov-analysis/bin/cov-build --help 2>&1 | grep -iE -B1 -A2 'capture|search|no-?command|script|javascript|typescript|language' | head -80 || true
+          echo "== config templates (shows supported languages)"
+          find cov-analysis/config/templates -maxdepth 1 -printf '%f ' 2>/dev/null; echo
+          exit 1
 
       - name: Upload to Coverity Scan
         run: |
