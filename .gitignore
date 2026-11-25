@@ -1,0 +1,11 @@
+# Build output
+target/
+build/
+dist/
+.gradle/
+node_modules/
+coverage/
+
+# Coverity (created by the pipeline)
+cov-int/
+cov-analysis/
