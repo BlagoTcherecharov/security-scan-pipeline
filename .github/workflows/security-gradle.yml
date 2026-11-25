@@ -11,7 +11,6 @@ on:
 
 permissions:
   contents: read
-  pull-requests: read
 
 # In the app's own repo: APP_DIR '.', and app_dir '.' in the trivy job at the bottom.
 env:
