@@ -10,15 +10,15 @@ GitHub Actions workflows for SonarQube Cloud, Coverity Scan and Trivy, for a Mav
   trivy.yml               reusable: builds the app's Docker image and scans it (input: app_dir)
 ```
 
-| Job | Runs on | What it does |
+The three jobs run in parallel, every time the workflow runs:
+
+| Job | What it does | Fails when |
 |---|---|---|
-| `sonar` | PRs to `main` + push to `main` | SAST + code quality, PR decoration, fails on quality gate. Builds without tests. |
-| `coverity` | push to `main` | Builds without tests (Java) or captures source (JS/TS) and uploads to Coverity Scan |
-| `trivy` | push to `main` | Builds the app's Docker image and lists its vulnerabilities (base image packages + dependencies inside the image) in the job log. Doesn't fail the job and doesn't save anything. |
+| `sonar` | SAST + code quality on the app folder. Builds without tests. | The quality gate fails |
+| `coverity` | Builds without tests (Java) or captures the source with `cov-capture` (JS/TS), then uploads to Coverity Scan | The build or upload breaks. Defects never fail it: Coverity analyzes later on its own servers, and results arrive on the dashboard and by email. |
+| `trivy` | Builds the app's Docker image and prints every vulnerability with its severity (base image packages + dependencies inside the image) | Anything HIGH or CRITICAL is found |
 
-**For now all three workflows are manual only.** Start one from **Actions > Security (maven/gradle/frontend) > Run workflow**. A manual run does Sonar, Coverity and Trivy in one go. To switch to automatic runs, uncomment `pull_request` and `push` at the top of each workflow.
-
-Coverity doesn't run on PRs because free Coverity Scan has weekly build caps and keeps only one snapshot per project. A PR build would overwrite `main`'s results. A green Coverity job only means the upload worked: the analysis runs later on Coverity's servers, and the results show up on the Coverity Scan dashboard and by email.
+**For now all three workflows are manual only.** Start one from **Actions > Security (maven/gradle/frontend) > Run workflow** (a new run, not "Re-run": a re-run uses the workflow files from the original commit). To also run on PRs and pushes to `main`, uncomment `pull_request` and `push` at the top of each workflow. Then Coverity runs on PRs too: each run uses a build from the free Coverity Scan quota and replaces the project's previous results.
 
 ## Demo apps
 `apps/` contains three small demo apps. Each is a tiny HTTP server on port 8080 with a self-contained (multi-stage) Dockerfile:
@@ -26,8 +26,10 @@ Coverity doesn't run on PRs because free Coverity Scan has weekly build caps and
 - `gradle-app`: Java 21, Gradle wrapper, Sonar plugin and `gradle.lockfile` already set up
 - `frontend`: TypeScript with one plain `.js` file, npm. The runtime image drops npm/yarn/corepack, because their bundled packages have known vulns.
 
+The Dockerfiles currently use **deliberately vulnerable base images**, to show the Trivy HIGH/CRITICAL block working: `eclipse-temurin:21.0.1_12-jre-jammy` (old) for both Java apps and `node:24.22-bookworm` (full Debian) for the frontend. Switch to `eclipse-temurin:21-jre-alpine` / `node:24-alpine` to make Trivy pass.
+
 ## Testing in this repo
-- **Sonar** needs three projects, one per app. Their keys are set in `SONAR_PROJECT_KEY` at the top of each workflow: `BlagoTcherecharov_security-scan-pipeline`, `..._gradle-app` and `..._frontend`. Create the last two in Sonar with exactly those keys, or change the keys in the workflows.
+- **Sonar** needs three projects, one per app. Their keys are set in `SONAR_PROJECT_KEY` at the top of each workflow: `BlagoTcherecharov_security-scan-pipeline`, `..._gradle-app` and `..._frontend`. See [SonarQube Cloud projects](#sonarqube-cloud-projects) below.
 - **Coverity:** all three apps share the same secrets, so they upload to the same Coverity Scan project, and each upload replaces the previous snapshot. Run one app, wait for its analysis email, check the results, then run the next.
 
 ## Moving to an app repo
@@ -54,13 +56,19 @@ Repos must be **public**. The free Coverity Scan and Sonar Cloud tiers depend on
 
 Trivy needs no secrets.
 
+### SonarQube Cloud projects
+For each project:
+- **Create it yourself before the first run.** If an analysis arrives for a key that doesn't exist, SonarQube Cloud creates the project automatically, with main branch `master`. Your repo uses `main`, so the run then fails with `Organization is not allowed to access data from non main branches`.
+- **Main branch must be `main`.** Check the branch dropdown on the project page. To fix a project stuck on `master`, rename the branch (branch dropdown > Manage branches) or delete and recreate the project with main branch `main`.
+- **Automatic Analysis must be off** (Administration > Analysis Method). It's on for a project created by importing the repo from GitHub. It scans the whole repo without building (no Java), and Sonar rejects the CI analysis while it's on: `You are running CI analysis while Automatic Analysis is enabled`.
+
 ### App requirements
 - **Dockerfile:** must be named `Dockerfile`, sit at the root of the app folder, and be **self-contained** (multi-stage, builds its own jar or bundle). Nothing is built before `docker build`.
 - **Gradle:** add the Sonar plugin, `id("org.sonarqube") version "7.6.0.18749"`.
 - **Frontend:** commit `package-lock.json`.
 
 ### Branch protection (once PR triggers are on)
-Protect `main` and require the **`sonar`** check, so a failing quality gate blocks the merge.
+A workflow can't block a push: by the time it runs, the commit is already on GitHub. To block code, work through PRs: protect `main`, require pull requests, and mark the checks as required (`sonar`, `coverity`, `trivy / trivy`). Any required check that fails then blocks the merge.
 
 ## Notes
 - Java 21 / Node 24 are set in the `setup-java` / `setup-node` steps.

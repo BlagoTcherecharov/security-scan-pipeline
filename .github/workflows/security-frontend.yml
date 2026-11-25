@@ -93,15 +93,12 @@ jobs:
           tar xzf cov-analysis.tgz --strip-components=1 -C cov-analysis
           rm cov-analysis.tgz
 
-      # JS/TS needs no build: capture the source files directly.
-      # `true` is a no-op build command (the Coverity Scan tool doesn't support --no-command).
+      # JS/TS needs no build: cov-capture reads the source files directly
+      # (cov-build in this tool has no build-less options). No npm install here, so no node_modules.
       - name: Capture source
         run: |
-          cov-analysis/bin/cov-build --ident
-          cov-analysis/bin/cov-build --dir cov-int \
-            --fs-capture-search "$APP_DIR" \
-            --fs-capture-search-exclude-regex '/(node_modules|dist)/' \
-            true
+          cov-analysis/bin/cov-capture --help | head -60 || true
+          cov-analysis/bin/cov-capture --dir cov-int --source-dir "$APP_DIR"
 
       - name: Upload to Coverity Scan
         run: |
