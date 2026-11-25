@@ -11,7 +11,6 @@ on:
 
 permissions:
   contents: read
-  pull-requests: read
 
 # In the app's own repo: APP_DIR '.', and app_dir '.' in the trivy job at the bottom.
 env:
@@ -93,21 +92,22 @@ jobs:
           tar xzf cov-analysis.tgz --strip-components=1 -C cov-analysis
           rm cov-analysis.tgz
 
-      # TEMPORARY: find out how this Coverity Scan tool captures JS/TS without a build.
-      # Prints the tool's commands and cov-build's capture-related options, then stops
-      # (exit 1) so nothing is uploaded and no Coverity build quota is used.
-      - name: Inspect Coverity tool
+      # JS/TS needs no build: `coverity capture` reads the source files in the current folder.
+      # It writes its own intermediate dir; we move that to ./cov-int, which Coverity Scan expects.
+      - name: Capture source
+        working-directory: ${{ env.APP_DIR }}
         run: |
-          echo "== version"; cov-analysis/bin/cov-build --ident
-          echo "== commands in bin/ (capture/emit/script related)"
-          find cov-analysis/bin -maxdepth 1 -type f -printf '%f\n' | grep -iE 'capture|emit|java|script|node|ts|js' || true
-          echo "== all commands in bin/"
-          find cov-analysis/bin -maxdepth 1 -type f -printf '%f ' ; echo
-          echo "== cov-build options mentioning capture/search/command/script/language"
-          cov-analysis/bin/cov-build --help 2>&1 | grep -iE -B1 -A2 'capture|search|no-?command|script|javascript|typescript|language' | head -80 || true
-          echo "== config templates (shows supported languages)"
-          find cov-analysis/config/templates -maxdepth 1 -printf '%f ' 2>/dev/null; echo
-          exit 1
+          COV="$GITHUB_WORKSPACE/cov-analysis/bin/coverity"
+          "$COV" capture --help 2>&1 | head -60 || true   # shows the options in the log, in case a flag is needed
+          "$COV" capture
+          idir=$(find . -type d -name emit -prune -printf '%h\n' | head -1)
+          if [ -z "$idir" ] || [ "$idir" = "." ]; then
+            echo "::error::Couldn't find Coverity's intermediate directory after capture"
+            find . -maxdepth 3 -type d -not -path './src*'
+            exit 1
+          fi
+          echo "Intermediate directory: $idir"
+          mv "$idir" "$GITHUB_WORKSPACE/cov-int"
 
       - name: Upload to Coverity Scan
         run: |
