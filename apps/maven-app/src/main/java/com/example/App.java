@@ -29,6 +29,6 @@ public final class App {
         System.out.println("maven-app listening on :8080");
 
         Integer blabla = null;
-        System.println(blabla.toString());
+        System.out.println(blabla.toString());
     }
 }
