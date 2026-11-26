@@ -1,0 +1,61 @@
+# Composite action: Coverity Scan capture + upload for any build tool.
+# Set up the language in the calling job first (e.g. setup-java).
+# Green = build accepted; Coverity analyzes later and sends results by email / dashboard.
+name: Coverity scan
+description: Capture an app with Coverity and upload it to Coverity Scan
+
+inputs:
+  app_dir:
+    description: Folder with the app
+    default: '.'
+  build_command:
+    description: Build to record (no tests). 'true' = nothing to build; source files that need no build (JS/TS) are read directly.
+    default: 'true'
+  token:
+    description: Coverity Scan project token
+    required: true
+  email:
+    description: Email on the Coverity Scan account
+    required: true
+  project:
+    description: Coverity Scan project name, e.g. owner/repo
+    required: true
+
+runs:
+  using: composite
+  steps:
+    - name: Download Coverity tool
+      shell: bash
+      env:
+        TOKEN: ${{ inputs.token }}
+        PROJECT: ${{ inputs.project }}
+      run: |
+        mkdir cov-analysis
+        curl -fsS https://scan.coverity.com/download/linux64 --data-urlencode "token=$TOKEN" --data-urlencode "project=$PROJECT" \
+          | tar xz --strip-components=1 -C cov-analysis
+
+    # `coverity capture` records the build command and reads source files that need no build (JS/TS).
+    # It writes its own intermediate dir; move it to ./cov-int, which Coverity Scan expects.
+    - name: Capture
+      shell: bash
+      working-directory: ${{ inputs.app_dir }}
+      env:
+        BUILD_COMMAND: ${{ inputs.build_command }}
+      run: |
+        "$GITHUB_WORKSPACE/cov-analysis/bin/coverity" capture -- bash -c "$BUILD_COMMAND"
+        mv "$(find . -type d -name emit -prune -printf '%h\n' | head -1)" "$GITHUB_WORKSPACE/cov-int"
+
+    # Coverity Scan replies HTTP 200 even when it rejects a build, so check the text
+    - name: Upload to Coverity Scan
+      shell: bash
+      env:
+        TOKEN: ${{ inputs.token }}
+        EMAIL: ${{ inputs.email }}
+        PROJECT: ${{ inputs.project }}
+      run: |
+        tar czf cov-int.tgz cov-int
+        response=$(curl -fsS "https://scan.coverity.com/builds?project=$(jq -rn --arg p "$PROJECT" '$p|@uri')" \
+          --form-string "token=$TOKEN" --form-string "email=$EMAIL" --form "file=@cov-int.tgz" \
+          --form-string "version=$GITHUB_SHA" --form-string "description=GitHub Actions run $GITHUB_RUN_ID")
+        echo "$response"
+        grep -q "Build successfully submitted" <<<"$response"

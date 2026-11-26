@@ -12,10 +12,10 @@ on:
 permissions:
   contents: read
 
-# In the app's own repo: APP_DIR '.', and app_dir '.' in the trivy job at the bottom.
+# npm-specific setup is written here as plain steps; the scanner actions are build-tool agnostic. JS, TS or both.
+# In the app's own repo: APP_DIR '.'.
 env:
   APP_DIR: apps/frontend
-  SONAR_PROJECT_KEY: BlagoTcherecharov_security-scan-pipeline_frontend
 
 jobs:
   sonar:
@@ -31,95 +31,36 @@ jobs:
           cache: npm
           cache-dependency-path: ${{ env.APP_DIR }}/package-lock.json
 
-      - name: Cache Sonar packages
-        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        with:
-          path: ~/.sonar/cache
-          key: ${{ runner.os }}-sonar
-
-      # Dependencies let Sonar resolve TypeScript types (no build, no tests)
-      - name: Install dependencies
+      - name: Install dependencies # lets Sonar resolve TypeScript types (no build, no tests)
         working-directory: ${{ env.APP_DIR }}
         run: npm ci --ignore-scripts
 
-      - name: Analyze
-        uses: SonarSource/sonarqube-scan-action@70bad232163b09d998ea0707ee80c0ec80798c16 # v8.5.1
-        env:
-          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
-          SONAR_HOST_URL: https://sonarcloud.io
+      - uses: ./.github/actions/sonar
         with:
-          projectBaseDir: ${{ env.APP_DIR }}
-          args: >
-            -Dsonar.organization=${{ secrets.SONAR_ORGANIZATION }}
-            -Dsonar.projectKey=${{ env.SONAR_PROJECT_KEY }}
-            -Dsonar.qualitygate.wait=true
-            -Dsonar.exclusions=**/node_modules/**,**/dist/**
+          app_dir: ${{ env.APP_DIR }}
+          project_key: BlagoTcherecharov_security-scan-pipeline_frontend
+          organization: ${{ secrets.SONAR_ORGANIZATION }}
+          token: ${{ secrets.SONAR_TOKEN }}
+          args: -Dsonar.exclusions=**/node_modules/**,**/dist/**
 
   coverity:
     runs-on: ubuntu-latest
-    env:
-      COVERITY_TOKEN: ${{ secrets.COVERITY_SCAN_TOKEN }}
-      COVERITY_EMAIL: ${{ secrets.COVERITY_SCAN_EMAIL }}
-      COVERITY_PROJECT: ${{ secrets.COVERITY_SCAN_PROJECT }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      # The Coverity tool is ~1 GB: cache it, keyed on the md5 of the latest release
-      - name: Get Coverity tool version
-        id: covver
-        run: |
-          md5=$(curl -fsS https://scan.coverity.com/download/linux64 \
-            --data-urlencode "token=$COVERITY_TOKEN" \
-            --data-urlencode "project=$COVERITY_PROJECT" \
-            --data-urlencode "md5=1")
-          echo "md5=$md5" >> "$GITHUB_OUTPUT"
-
-      - name: Cache Coverity tool
-        id: covcache
-        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      # no setup and no build_command: Coverity reads the JS/TS source directly
+      - uses: ./.github/actions/coverity
         with:
-          path: cov-analysis
-          key: coverity-${{ runner.os }}-${{ steps.covver.outputs.md5 }}
-
-      - name: Download Coverity tool
-        if: steps.covcache.outputs.cache-hit != 'true'
-        run: |
-          curl -fsS https://scan.coverity.com/download/linux64 \
-            --data-urlencode "token=$COVERITY_TOKEN" \
-            --data-urlencode "project=$COVERITY_PROJECT" \
-            -o cov-analysis.tgz
-          mkdir cov-analysis
-          tar xzf cov-analysis.tgz --strip-components=1 -C cov-analysis
-          rm cov-analysis.tgz
-
-      # JS/TS needs no build: `coverity capture` reads the source files in the current folder.
-      # It writes its own intermediate dir; we move that to ./cov-int, which Coverity Scan expects.
-      - name: Capture source
-        working-directory: ${{ env.APP_DIR }}
-        run: |
-          COV="$GITHUB_WORKSPACE/cov-analysis/bin/coverity"
-          "$COV" capture --help 2>&1 | head -60 || true   # shows the options in the log, in case a flag is needed
-          "$COV" capture
-          idir=$(find . -type d -name emit -prune -printf '%h\n' | head -1)
-          if [ -z "$idir" ] || [ "$idir" = "." ]; then
-            echo "::error::Couldn't find Coverity's intermediate directory after capture"
-            find . -maxdepth 3 -type d -not -path './src*'
-            exit 1
-          fi
-          echo "Intermediate directory: $idir"
-          mv "$idir" "$GITHUB_WORKSPACE/cov-int"
-
-      - name: Upload to Coverity Scan
-        run: |
-          tar czf cov-int.tgz cov-int
-          curl -fsS "https://scan.coverity.com/builds?project=$(jq -rn --arg p "$COVERITY_PROJECT" '$p|@uri')" \
-            --form-string "token=$COVERITY_TOKEN" \
-            --form-string "email=$COVERITY_EMAIL" \
-            --form "file=@cov-int.tgz" \
-            --form-string "version=$GITHUB_SHA" \
-            --form-string "description=GitHub Actions run $GITHUB_RUN_ID"
+          app_dir: ${{ env.APP_DIR }}
+          token: ${{ secrets.COVERITY_SCAN_TOKEN }}
+          email: ${{ secrets.COVERITY_SCAN_EMAIL }}
+          project: ${{ secrets.COVERITY_SCAN_PROJECT }}
 
   trivy:
-    uses: ./.github/workflows/trivy.yml
-    with:
-      app_dir: apps/frontend # same as APP_DIR
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: ./.github/actions/trivy
+        with:
+          app_dir: ${{ env.APP_DIR }}

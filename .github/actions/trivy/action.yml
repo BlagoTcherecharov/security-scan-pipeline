@@ -1,0 +1,40 @@
+# Composite action: builds the app's Docker image and lists its vulnerabilities
+# (base image OS packages from FROM ..., plus dependencies inside the image). Fails on HIGH/CRITICAL.
+name: Trivy image scan
+description: Build an app's Docker image and scan it with Trivy
+
+inputs:
+  app_dir:
+    description: Folder with the Dockerfile
+    default: '.'
+  image:
+    description: Local name for the built image
+    default: local/app:scan
+
+runs:
+  using: composite
+  steps:
+    - name: Build image
+      shell: bash
+      env:
+        APP_DIR: ${{ inputs.app_dir }}
+        IMAGE: ${{ inputs.image }}
+      run: docker build -t "$IMAGE" "$APP_DIR"
+
+    # Report: every finding with its severity (LOW, MEDIUM, HIGH, CRITICAL, UNKNOWN). Never fails.
+    - name: Scan image (all severities)
+      uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+      with:
+        scan-type: image
+        image-ref: ${{ inputs.image }}
+        format: table
+
+    # Gate: fails the job if anything HIGH or CRITICAL is found.
+    - name: Block on HIGH/CRITICAL
+      uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+      with:
+        scan-type: image
+        image-ref: ${{ inputs.image }}
+        format: table
+        severity: HIGH,CRITICAL
+        exit-code: '1'

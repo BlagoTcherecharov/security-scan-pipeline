@@ -12,17 +12,14 @@ on:
 permissions:
   contents: read
 
-# In the app's own repo: APP_DIR '.', and app_dir '.' in the trivy job at the bottom.
+# Maven-specific setup is written here as plain steps; the scanner actions are build-tool agnostic.
+# In the app's own repo: APP_DIR '.'.
 env:
   APP_DIR: apps/maven-app
-  SONAR_PROJECT_KEY: BlagoTcherecharov_security-scan-pipeline
 
 jobs:
   sonar:
     runs-on: ubuntu-latest
-    defaults:
-      run:
-        working-directory: ${{ env.APP_DIR }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -34,29 +31,22 @@ jobs:
           java-version: '21'
           cache: maven
 
-      - name: Cache Sonar packages
-        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        with:
-          path: ~/.sonar/cache
-          key: ${{ runner.os }}-sonar
+      - name: Compile (no tests)
+        working-directory: ${{ env.APP_DIR }}
+        run: mvn -B -DskipTests compile
 
-      - name: Build and analyze (no tests)
-        env:
-          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
-          SONAR_ORGANIZATION: ${{ secrets.SONAR_ORGANIZATION }}
-        run: |
-          mvn -B -DskipTests verify org.sonarsource.scanner.maven:sonar-maven-plugin:sonar \
-            -Dsonar.host.url=https://sonarcloud.io \
-            -Dsonar.organization="$SONAR_ORGANIZATION" \
-            -Dsonar.projectKey="$SONAR_PROJECT_KEY" \
-            -Dsonar.qualitygate.wait=true
+      - uses: ./.github/actions/sonar
+        with:
+          app_dir: ${{ env.APP_DIR }}
+          project_key: BlagoTcherecharov_security-scan-pipeline
+          organization: ${{ secrets.SONAR_ORGANIZATION }}
+          token: ${{ secrets.SONAR_TOKEN }}
+          args: >
+            -Dsonar.java.binaries=target/classes
+            -Dsonar.java.libraries=/home/runner/.m2/repository/**/*.jar
 
   coverity:
     runs-on: ubuntu-latest
-    env:
-      COVERITY_TOKEN: ${{ secrets.COVERITY_SCAN_TOKEN }}
-      COVERITY_EMAIL: ${{ secrets.COVERITY_SCAN_EMAIL }}
-      COVERITY_PROJECT: ${{ secrets.COVERITY_SCAN_PROJECT }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
@@ -66,51 +56,19 @@ jobs:
           java-version: '21'
           cache: maven
 
-      # The Coverity tool is ~1 GB: cache it, keyed on the md5 of the latest release
-      - name: Get Coverity tool version
-        id: covver
-        run: |
-          md5=$(curl -fsS https://scan.coverity.com/download/linux64 \
-            --data-urlencode "token=$COVERITY_TOKEN" \
-            --data-urlencode "project=$COVERITY_PROJECT" \
-            --data-urlencode "md5=1")
-          echo "md5=$md5" >> "$GITHUB_OUTPUT"
-
-      - name: Cache Coverity tool
-        id: covcache
-        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      - uses: ./.github/actions/coverity
         with:
-          path: cov-analysis
-          key: coverity-${{ runner.os }}-${{ steps.covver.outputs.md5 }}
-
-      - name: Download Coverity tool
-        if: steps.covcache.outputs.cache-hit != 'true'
-        run: |
-          curl -fsS https://scan.coverity.com/download/linux64 \
-            --data-urlencode "token=$COVERITY_TOKEN" \
-            --data-urlencode "project=$COVERITY_PROJECT" \
-            -o cov-analysis.tgz
-          mkdir cov-analysis
-          tar xzf cov-analysis.tgz --strip-components=1 -C cov-analysis
-          rm cov-analysis.tgz
-
-      - name: Build with cov-build (no tests)
-        working-directory: ${{ env.APP_DIR }}
-        run: |
-          "$GITHUB_WORKSPACE/cov-analysis/bin/cov-build" --dir "$GITHUB_WORKSPACE/cov-int" \
-            mvn -B -DskipTests clean package
-
-      - name: Upload to Coverity Scan
-        run: |
-          tar czf cov-int.tgz cov-int
-          curl -fsS "https://scan.coverity.com/builds?project=$(jq -rn --arg p "$COVERITY_PROJECT" '$p|@uri')" \
-            --form-string "token=$COVERITY_TOKEN" \
-            --form-string "email=$COVERITY_EMAIL" \
-            --form "file=@cov-int.tgz" \
-            --form-string "version=$GITHUB_SHA" \
-            --form-string "description=GitHub Actions run $GITHUB_RUN_ID"
+          app_dir: ${{ env.APP_DIR }}
+          build_command: mvn -B -DskipTests clean package
+          token: ${{ secrets.COVERITY_SCAN_TOKEN }}
+          email: ${{ secrets.COVERITY_SCAN_EMAIL }}
+          project: ${{ secrets.COVERITY_SCAN_PROJECT }}
 
   trivy:
-    uses: ./.github/workflows/trivy.yml
-    with:
-      app_dir: apps/maven-app # same as APP_DIR
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: ./.github/actions/trivy
+        with:
+          app_dir: ${{ env.APP_DIR }}

@@ -1,0 +1,43 @@
+# Composite action: SonarQube Cloud scan for any build tool.
+# Set up the language and build in the calling job first (e.g. setup-java + mvn compile).
+name: Sonar scan
+description: SonarQube Cloud scan of an app folder, fails on a failed quality gate
+
+inputs:
+  app_dir:
+    description: Folder to analyze
+    default: '.'
+  project_key:
+    description: Project key exactly as shown in SonarQube Cloud
+    required: true
+  organization:
+    description: SonarQube Cloud organization key
+    required: true
+  token:
+    description: SonarQube Cloud token
+    required: true
+  args:
+    description: Extra scanner args, e.g. -Dsonar.java.binaries=target/classes
+    default: ''
+
+runs:
+  using: composite
+  steps:
+    - name: Cache Sonar packages
+      uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      with:
+        path: ~/.sonar/cache
+        key: ${{ runner.os }}-sonar
+
+    - name: Analyze
+      uses: SonarSource/sonarqube-scan-action@70bad232163b09d998ea0707ee80c0ec80798c16 # v8.5.1
+      env:
+        SONAR_TOKEN: ${{ inputs.token }}
+        SONAR_HOST_URL: https://sonarcloud.io
+      with:
+        projectBaseDir: ${{ inputs.app_dir }}
+        args: >
+          -Dsonar.organization=${{ inputs.organization }}
+          -Dsonar.projectKey=${{ inputs.project_key }}
+          -Dsonar.qualitygate.wait=true
+          ${{ inputs.args }}
